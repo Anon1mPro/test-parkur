@@ -1,0 +1,26 @@
+[
+  {
+    "id": 4,
+    "type": "ambient",
+    "name": "Ambient",
+    "color": "#9fb0e0",
+    "intensity": 0.75,
+    "position": {
+      "x": 0,
+      "y": 5,
+      "z": 0
+    }
+  },
+  {
+    "id": 5,
+    "type": "sun",
+    "name": "Quyosh",
+    "color": "#ffd9a8",
+    "intensity": 2.2,
+    "position": {
+      "x": 40,
+      "y": 60,
+      "z": 30
+    }
+  }
+]

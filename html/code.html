@@ -1,0 +1,239 @@
+
+if(!window.PKScreens) window.PKScreens=(function(){
+  // ══ SOZLAMA ═══════════════════════════════════════════════
+  // Reklama sahifangiz Netlify'ga chiqqach, havolani shu yerga yozing:
+  const ADS_URL = '';     // masalan: 'https://mening-reklamam.netlify.app'
+  // Ekran yaqinida (shu metrdan yaqin) haqiqiy sahifa (iframe) ochiladi; uzoqda esa tez RASM ko'rinadi.
+  const LIVE_R  = 12;
+  // ═══════════════════════════════════════════════════════════
+  //  ⚡ NEGA RASM: har bir iframe alohida brauzer sahifasi — 3-4 tasi FPS ni 30 ga tushirardi.
+  //  Statistika va reklama endi oddiy tekstura sifatida chiziladi (juda yengil).
+  const W = 1024, H = 576;
+  let SLIDES = [
+    { title:'Reklama joyi', text:"Bu yerga o'z reklamangizni qo'ying", bg:['#1b2a6b','#06081f'], accent:'#00e5ff', seconds:6 },
+    { title:'APEX PARKUR', text:'100 level · 100 checkpoint · lavadan qoching!', bg:['#5b1a6b','#12061f'], accent:'#ff3fd0', seconds:6 },
+    { title:'Eng tez finish — kim?', text:'Reytingni checkpoint orollaridagi ekranlarda ko\'ring', bg:['#6b4a1a','#1f1206'], accent:'#ffd24a', seconds:6 },
+    { title:"Do'stlaringni chaqir", text:'Multiplayer va chat — T tugmasi', bg:['#1a6b4a','#061f14'], accent:'#4dff9a', seconds:6 } ];
+  const SB = 'allow-scripts allow-forms allow-modals';
+  const esc = s => String(s).replace(/&/g,'&amp;').replace(/"/g,'&quot;');
+  const FR = 'position:fixed;left:0;top:0;width:100%;height:100%;border:0;background:#000';
+  const liveHtml = () => '<style>html,body{margin:0!important;padding:0!important;overflow:hidden!important;background:#000}</style><iframe src="'+esc(ADS_URL)+'" sandbox="'+SB+'" style="'+FR+'"></iframe>';
+
+  // ── 📊 STATISTIKA MA'LUMOTI: bitta ulanish, hamma ekranlar uchun ──
+  const FEED = { fast:[], lvl:[], die:[], live:[], counts:{ players:0, fin:0, best:null, live:0 } };
+  let feedOn = false, feedVer = 0;
+  function feedStart(){
+    if(feedOn || !window.PKStats || !PKStats.db) return; feedOn = true;
+    PKStats.db().then(db => { if(!db){ feedOn = false; return; }
+      db.ref('parkour/best').orderByChild('timeMs').limitToFirst(8).on('value', s => { const a=[]; s.forEach(c=>{ const v=c.val(); if(v&&v.timeMs) a.push(v); }); FEED.fast=a; FEED.counts.best=a.length?a[0].timeMs:null; feedVer++; });
+      db.ref('parkour/players').orderByChild('maxLevel').limitToLast(100).on('value', s => { const a=[]; s.forEach(c=>a.push(c.val()||{}));
+        FEED.counts.players=a.length; FEED.counts.fin=a.filter(v=>v.finishes).length;
+        FEED.lvl=a.slice().sort((x,y)=>(y.maxLevel||0)-(x.maxLevel||0)).slice(0,8);
+        FEED.die=a.slice().sort((x,y)=>(y.totalDeaths||0)-(x.totalDeaths||0)).slice(0,8); feedVer++; });
+      db.ref('parkour/live').orderByChild('updated').limitToLast(50).on('value', s => { const now=Date.now(), a=[]; s.forEach(c=>{ const v=c.val()||{}; if(!v.finishedAt && now-(v.updated||0)<120000) a.push(v); });
+        a.sort((x,y)=>(y.cp||0)-(x.cp||0)); FEED.live=a.slice(0,8); FEED.counts.live=a.length; feedVer++; });
+    });
+    fetchSlides();
+  }
+  let slidesTried = false;
+  function fetchSlides(){
+    if(slidesTried || !ADS_URL) return; slidesTried = true;
+    try{ fetch(ADS_URL.replace(/\/+$/,'') + '/slides.json', { cache:'no-store' }).then(r => r.json())
+      .then(a => { if(Array.isArray(a) && a.length){ SLIDES = a; ADSC.clear(); loadImgs(); } }).catch(()=>{}); }catch(e){}
+  }
+
+  // ── 🎨 CANVAS ISHLOVCHILARI ─────────────────────────────────────
+  let cv = null, cx = null;
+  const ctx2 = () => { if(!cv){ cv = document.createElement('canvas'); cv.width = W; cv.height = H; cx = cv.getContext('2d'); } return cx; };
+  const fmt = ms => { ms = Math.max(0, +ms||0); const m = Math.floor(ms/60000), s = (ms%60000)/1000; return String(m).padStart(2,'0')+':'+s.toFixed(2).padStart(5,'0'); };
+  const FONT = '"Segoe UI",Arial,sans-serif';
+  function rrect(c,x,y,w,h,r){ c.beginPath(); c.moveTo(x+r,y); c.arcTo(x+w,y,x+w,y+h,r); c.arcTo(x+w,y+h,x,y+h,r); c.arcTo(x,y+h,x,y,r); c.arcTo(x,y,x+w,y,r); c.closePath(); }
+  function bgGrad(c,a,b){ const g = c.createLinearGradient(0,0,W*0.4,H); g.addColorStop(0,a); g.addColorStop(1,b); c.fillStyle = g; c.fillRect(0,0,W,H); }
+  const TABS = ['fast','lvl','die','live'];
+  const TITLES = { fast:'⚡ ENG TEZLAR', lvl:'🏔 ENG BALAND LEVEL', die:"☠ ENG KO'P O'LGANLAR", live:"🟢 HOZIR O'YNAYOTGANLAR" };
+  const COLS = {
+    fast:[["#",40,v=>v.i],["O'YINCHI",110,v=>v.r.name||'?'],['VAQT',500,v=>fmt(v.r.timeMs),'#00e5ff'],["O'LIMLAR",700,v=>v.r.deaths||0],['TUGAGAN',830,v=>new Date(v.r.finishedAt).toLocaleDateString()]],
+    lvl:[["#",40,v=>v.i],["O'YINCHI",110,v=>v.r.name||'?'],['LEVEL',500,v=>(v.r.maxLevel||0)+' / 100','#00e5ff'],["O'LIMLAR",700,v=>v.r.totalDeaths||0],['FINISH',830,v=>v.r.finishes||0]],
+    die:[["#",40,v=>v.i],["O'YINCHI",110,v=>v.r.name||'?'],["O'LIMLAR",500,v=>v.r.totalDeaths||0,'#ff8a8a'],['LEVEL',700,v=>(v.r.maxLevel||0)+' / 100'],["O'YINLAR",830,v=>v.r.runs||0]],
+    live:[["O'YINCHI",60,v=>'● '+(v.r.name||'?'),'#4dff9a'],['LEVEL',500,v=>(v.r.cp||0)+' / 100'],["O'LIMLAR",700,v=>v.r.deaths||0],['BOSHLAGAN',830,v=>new Date(v.r.startedAt).toLocaleTimeString().slice(0,5)]] };
+  function drawStats(tab){
+    const c = ctx2(); bgGrad(c,'#141f55','#050818');
+    c.textAlign = 'center'; c.textBaseline = 'middle';
+    c.shadowColor = '#00e5ff'; c.shadowBlur = 24; c.fillStyle = '#00e5ff'; c.font = '800 46px '+FONT; c.fillText('A P E X   P A R K U R', W/2, 44); c.shadowBlur = 0;
+    const cn = FEED.counts, boxes = [['O\'YINCHILAR', cn.players||0], ['FINISHGA YETGAN', cn.fin||0], ['ENG TEZ', cn.best?fmt(cn.best):'–'], ["HOZIR O'YNAYAPTI", cn.live||0]];
+    boxes.forEach((b,i) => { const bx = 40+i*242, by = 84; c.fillStyle = 'rgba(255,255,255,.07)'; rrect(c,bx,by,226,74,12); c.fill();
+      c.fillStyle = '#4dff9a'; c.font = '800 34px '+FONT; c.fillText(String(b[1]), bx+113, by+28);
+      c.fillStyle = '#8b97c7'; c.font = '600 13px '+FONT; c.fillText(b[0], bx+113, by+58); });
+    c.textAlign = 'left'; c.fillStyle = '#ffd24a'; c.font = '800 26px '+FONT; c.fillText(TITLES[tab], 40, 192);
+    const rows = FEED[tab] || [], cols = COLS[tab];
+    c.fillStyle = '#8b97c7'; c.font = '700 14px '+FONT; cols.forEach(k => c.fillText(k[0], k[1], 226));
+    c.fillStyle = 'rgba(255,255,255,.12)'; c.fillRect(40, 238, W-80, 2);
+    if(!rows.length){ c.fillStyle = '#8b97c7'; c.font = '600 24px '+FONT; c.textAlign = 'center';
+      c.fillText(tab==='live' ? "Hozir hech kim o'ynamayapti" : (tab==='fast' ? 'Hali hech kim finishga yetmagan' : "Hali o'yinchi yo'q"), W/2, 360); c.textAlign = 'left'; }
+    rows.slice(0,8).forEach((r,i) => { const y = 266 + i*38;
+      if(i < 3 && tab !== 'live'){ c.fillStyle = ['rgba(255,210,74,.13)','rgba(216,226,240,.09)','rgba(232,160,112,.09)'][i]; c.fillRect(40, y-18, W-80, 36); }
+      cols.forEach(k => { c.fillStyle = k[3] || (i===0&&tab!=='live' ? '#ffd24a' : '#dfe8ff'); c.font = (k[3] ? '800 ' : '600 ') + '22px '+FONT;
+        c.fillText(String(k[2]({r:r,i:i+1})).slice(0,18), k[1], y); }); });
+    return cv.toDataURL('image/jpeg', 0.86);
+  }
+  const IMGS = {};   // ochilgan reklama rasmlari
+  function loadImgs(){ SLIDES.forEach(s => { if(s.image && !IMGS[s.image]){ const im = new Image(); im.crossOrigin = 'anonymous'; im.onload = () => { IMGS[s.image] = im; ADSC.clear(); }; im.onerror = () => { IMGS[s.image] = false; }; im.src = s.image; IMGS[s.image] = null; } }); }
+  function wrapText(c,t,x,y,maxW,lh){ const w = String(t).split(' '); let line = '', yy = y; w.forEach(word => { const test = line + word + ' ';
+      if(c.measureText(test).width > maxW && line){ c.fillText(line.trim(), x, yy); line = word + ' '; yy += lh; } else line = test; }); c.fillText(line.trim(), x, yy); }
+  function drawAds(i, useImg){
+    const s = SLIDES[i], c = ctx2(); bgGrad(c, (s.bg&&s.bg[0])||'#1b2a6b', (s.bg&&s.bg[1])||'#06081f');
+    c.textAlign = 'center'; c.textBaseline = 'middle'; let ty = H/2 - 20;
+    const im = useImg && s.image && IMGS[s.image];
+    if(im){ const mh = 250, sc = Math.min(mh/im.height, (W*0.7)/im.width); const iw = im.width*sc, ih = im.height*sc; c.drawImage(im, (W-iw)/2, 40, iw, ih); ty = 40 + ih + 70; }
+    c.shadowColor = s.accent || '#00e5ff'; c.shadowBlur = 28; c.fillStyle = '#fff'; c.font = '900 '+(im?58:78)+'px '+FONT;
+    let t = String(s.title||'').toUpperCase(); while(c.measureText(t).width > W-80 && t.length > 4) t = t.slice(0,-2); c.fillText(t, W/2, ty); c.shadowBlur = 0;
+    if(s.text){ c.fillStyle = 'rgba(255,255,255,.92)'; c.font = '600 32px '+FONT; wrapText(c, s.text, W/2, ty+78, W-160, 42); }
+    c.fillStyle = s.accent || '#00e5ff'; c.fillRect(0, H-10, W, 10);
+    return cv.toDataURL('image/jpeg', 0.86);
+  }
+  // ── tayyor rasmlar keshi ───────────────────────────────────────
+  const STC = {}, ADSC = new Map();
+  function statsImg(tab, now, every){
+    const key = tab === 'all' ? TABS[Math.floor(now/9000) % 4] : tab;
+    let e = STC[key]; if(!e || e.v !== feedVer || now - e.t > 30000){ e = STC[key] = { url: drawStats(key), t: now, v: feedVer }; }
+    return e.url;
+  }
+  function adsIndex(now){ const tot = SLIDES.reduce((a,s)=>a+Math.max(2,+s.seconds||6),0); let t = (now/1000) % tot, i = 0;
+    for(; i < SLIDES.length; i++){ const d = Math.max(2,+s_sec(SLIDES[i])); if(t < d) break; t -= d; } return Math.min(i, SLIDES.length-1); }
+  const s_sec = s => s.seconds || 6;
+  function adsImg(now){ const i = adsIndex(now); let u = ADSC.get(i);
+    if(!u){ try{ u = drawAds(i, true); }catch(e){ u = drawAds(i, false); } ADSC.set(i, u); } return u; }
+
+  // ── ⚙ SIFAT DARAJALARI (FPS pasaysa o'zi soddalashadi) ───────────
+  //  R — shu masofadan uzoqdagi obyektlar CHIZILMAYDI (tuman baribir yashiradi)
+  const CFG = [ {R:300, fog:0.0062, pr:0, every:3000}, {R:210, fog:0.0085, pr:1, every:5000}, {R:140, fog:0.0125, pr:0.75, every:8000} ];
+  let Q = 0, RC = CFG[0].R, base = null, iv = null, last = '', frames = 0, tF = 0, tQ = 0, raf = 0, tStart = 0, liveNow = null;
+  const isCullable = o => { const u = o.userData; return !!u && u.isStatic && o.visible !== false && !u.isPCBlock && !u.isHitbox &&
+      !u.isPlayerObj && !u.isSpawn && !u.isLava && !u.isStartBlock && !u.isFinishBlock && !/Yo'qoluvchi|Miltillovchi|Tushuvchi/.test(u.name||''); };
+  const cullList = () => window._pkCull || (window._pkCull = objects.filter(isCullable));
+  const pcList = () => window._pkPCs || (window._pkPCs = objects.filter(o => o.userData && o.userData.isPCBlock && o.userData.pkRole));
+  const paint = pc => { try{ PCBlockSystem._paintScreen(pc); }catch(e){} };
+  function applyQ(q){
+    Q = q; RC = CFG[q].R;
+    try{ if(scene.fog && scene.fog.isFogExp2) scene.fog.density = CFG[q].fog; }catch(e){}
+    try{ if(CFG[q].pr && window.renderer){ renderer.setPixelRatio(CFG[q].pr); const c = renderer.domElement; renderer.setSize(c.clientWidth || innerWidth, c.clientHeight || innerHeight, false); } }catch(e){}
+  }
+  function toImage(pc){ const ud = pc.userData; ud._live = false; try{ PCBlockSystem.setPower(pc, false); }catch(e){} ud.screenMode = 'image'; ud.imageB64 = null; ud._texSrc = null; }
+  function stop(){
+    if(iv){ clearInterval(iv); iv = null; }
+    if(raf){ cancelAnimationFrame(raf); raf = 0; }
+    try{ pcList().forEach(pc => { const ud = pc.userData; if(ud._live){ toImage(pc); }
+        if(ud.powered){ ud.powered = false; paint(pc); } ud.imageB64 = null; ud._texSrc = null; }); }catch(e){}
+    try{ (window._pkCull || []).forEach(o => { o.visible = true; }); }catch(e){}
+    try{ if(base){ if(scene.fog && scene.fog.isFogExp2) scene.fog.density = base.fog;
+        if(window.renderer && base.pr){ renderer.setPixelRatio(base.pr); const c = renderer.domElement; renderer.setSize(c.clientWidth || innerWidth, c.clientHeight || innerHeight, false); } } }catch(e){}
+    window._pkPCs = null; window._pkCull = null; base = null; Q = 0; liveNow = null;
+  }
+  function start(api){
+    stop();
+    try{ base = { fog: (scene.fog && scene.fog.isFogExp2) ? scene.fog.density : 0.0045, pr: window.renderer ? renderer.getPixelRatio() : 0 }; }catch(e){ base = null; }
+    last = ''; frames = 0; tStart = tF = tQ = performance.now(); applyQ(0); loadImgs();
+    const loop = () => { frames++; raf = requestAnimationFrame(loop); }; raf = requestAnimationFrame(loop);
+    iv = setInterval(() => {
+      const P = window.PlayerController && PlayerController.obj;
+      if(!window.isPlaying || !P){ stop(); return; }
+      const pp = P.position, now = performance.now(), nowMs = Date.now();
+      // 1) uzoqdagi obyektlarni chizmaslik
+      const R2 = RC * RC;
+      cullList().forEach(o => { const dx = o.position.x-pp.x, dy = (o.position.y-pp.y)*0.5, dz = o.position.z-pp.z;
+        const v = (dx*dx + dy*dy + dz*dz) < R2; if(o.visible !== v) o.visible = v; });
+      // 2) ekranlar: yaqindagilarga tayyor rasm; uzoqdagilar o'chadi
+      let near = null, nd = 1e9;
+      pcList().forEach(pc => { const ud = pc.userData, d = pc.position.distanceTo(pp), R = ud.pkRange || 65;
+        if(d < R){
+          if(ud.pkRole === 'stats') feedStart(); else fetchSlides();
+          if(ud._live){ if(d < LIVE_R + 4){ near = pc; nd = -1; } return; }   // gisteresis: yaqinlashgan ekran uzilib qolmasin
+          const url = ud.pkRole === 'ads' ? adsImg(nowMs) : statsImg(ud.pkTab || 'all', nowMs, CFG[Q].every);
+          if(ud.imageB64 !== url || !ud.powered){ ud.screenMode = 'image'; ud.imageB64 = url; ud.powered = true; paint(pc); }
+          if(ud.pkRole === 'ads' && ADS_URL && d < LIVE_R && d < nd){ near = pc; nd = d; }
+        } else if(ud.powered && !ud._live && d > R + 20){ ud.powered = false; ud.imageB64 = null; ud._texSrc = null; paint(pc); } });
+      // 3) eng yaqin reklama ekrani — HAQIQIY sahifa (faqat bitta, faqat eng yuqori sifatda)
+      const want = (Q === 0) ? near : null;
+      if(liveNow && liveNow !== want){ toImage(liveNow); liveNow = null; }
+      if(want && want !== liveNow){ const ud = want.userData; ud._live = true; liveNow = want; try{ PCBlockSystem.setHtml(want, liveHtml()); PCBlockSystem.setPower(want, true); }catch(e){} }
+      // 4) FPS kuzatuvi: 3 soniya o'rtacha 42 dan past bo'lsa — sifatni bir pog'ona pasaytiramiz
+      if(now - tF >= 3000){ const fps = frames * 1000 / (now - tF); frames = 0; tF = now;
+        if(!window._pkNoAuto && now - tStart > 9000 && fps < 42 && Q < 2 && now - tQ > 6000){ tQ = now; applyQ(Q+1);
+          try{ api.addMessage('⚙ Grafika avtomatik soddalashtirildi (daraja '+(Q+1)+'/3, '+Math.round(fps)+' FPS)','#ffcc66'); }catch(e){} } }
+      try{
+        const st = window.MultiplayerSystem ? MultiplayerSystem.status() : '';
+        if(st !== last){ last = st;
+          if(st === 'on') api.addMessage('💬 Chat ulandi — T tugmasi bilan yozing','#6cf');
+          else if(st === 'error') api.addMessage("⚠ Chat ulanmadi — internet va Firebase qoidalarini tekshiring",'#f88');
+        }
+      }catch(e){}
+    }, 700);
+  }
+  return { start, stop, _drawStats: drawStats, _drawAds: drawAds, _state: () => ({ Q: Q, live: !!liveNow, fed: feedOn, slides: SLIDES.length }) };
+})();
+
+const n=performance.now(); if(hitbox.userData._t && n-hitbox.userData._t<1500){hitbox.userData._t=n;return;} hitbox.userData._t=n;
+const P=window._pk;
+if(!window.PKStats) window.PKStats=(function(){
+  const BASE='https://www.gstatic.com/firebasejs/10.12.2/';
+  const DEF={apiKey:'AIzaSyCfjV3jyJ5WfunbNzJUnPx3rOhaJHWkk5U',databaseURL:'https://parkour-project-cdd1b-default-rtdb.asia-southeast1.firebasedatabase.app'};
+  let ready=null, uid=null, name=null;
+  const LS={get(k){try{return localStorage.getItem(k);}catch(e){return null;}},set(k,v){try{localStorage.setItem(k,v);}catch(e){}}};
+  function load(src){return new Promise((res,rej)=>{
+    const ex=document.querySelector('script[data-fb="'+src+'"]');
+    if(ex){ if(ex._done) res(); else ex.addEventListener('load',()=>res()); return; }
+    const el=document.createElement('script'); el.src=src; el.setAttribute('data-fb',src);
+    el.onload=()=>{el._done=true;res();}; el.onerror=()=>rej(new Error('Firebase SDK yuklanmadi'));
+    document.head.appendChild(el);});}
+  function ident(){
+    let m=null; try{ m=window.MultiplayerSystem&&MultiplayerSystem.cfg; }catch(e){}
+    uid=(m&&m.uid)||LS.get('pk_uid');
+    if(!uid){ uid='u'+Math.random().toString(36).slice(2,10)+Date.now().toString(36).slice(-4); LS.set('pk_uid',uid); }
+    name=(m&&m.name)||LS.get('pk_name');
+    if(!name){ try{ name=(window.prompt("Ismingiz (reytingda ko'rinadi):",'')||'').trim().slice(0,20); }catch(e){} 
+      if(!name) name='Player '+Math.floor(100+Math.random()*900); LS.set('pk_name',name); }
+  }
+  function cfg(){ let c={}; try{ const m=window.MultiplayerSystem&&MultiplayerSystem.cfg; if(m&&window._fbParseConfig) c=_fbParseConfig(m.fbConfig)||{}; }catch(e){}
+    return {databaseURL:c.databaseURL||DEF.databaseURL, apiKey:c.apiKey||DEF.apiKey}; }
+  function init(){
+    if(ready) return ready;
+    ready=(async()=>{ await load(BASE+'firebase-app-compat.js'); await load(BASE+'firebase-database-compat.js');
+      const fb=window.firebase; const app=(fb.apps||[]).find(a=>a.name==='pk-stats')?fb.app('pk-stats'):fb.initializeApp(cfg(),'pk-stats');
+      return fb.database(app); })().catch(e=>{ ready=null; console.warn('[PKStats]',e&&e.message); return null; });
+    return ready; }
+  const TS=()=>window.firebase.database.ServerValue.TIMESTAMP;
+  function run(fn){ try{ init().then(db=>{ if(db){ try{ fn(db); }catch(e){ console.warn('[PKStats]',e.message); } } }); }catch(e){} }
+  return {
+    db(){ return init(); },
+    start(P){ ident(); P.wall0=Date.now();
+      run(db=>{ db.ref('parkour/live/'+uid).set({uid,name,startedAt:P.wall0,deaths:0,cp:0,updated:TS()});
+        db.ref('parkour/players/'+uid).transaction(v=>{ v=v||{}; v.name=name; v.runs=(v.runs||0)+1; v.maxLevel=v.maxLevel||0; v.totalDeaths=v.totalDeaths||0; v.finishes=v.finishes||0; v.lastSeen=Date.now(); return v; }); }); },
+    death(n){ run(db=>{ db.ref('parkour/live/'+uid).update({deaths:n,updated:TS()});
+        db.ref('parkour/players/'+uid).transaction(v=>{ v=v||{}; v.totalDeaths=(v.totalDeaths||0)+1; return v; }); }); },
+    cp(i){ run(db=>{ db.ref('parkour/live/'+uid).update({cp:i,updated:TS()});
+        db.ref('parkour/players/'+uid).transaction(v=>{ v=v||{}; v.maxLevel=Math.max(v.maxLevel||0,i); return v; }); }); },
+    finish(P){ const endWall=Date.now(), timeMs=Math.round(P.tEnd-P.t0), deaths=P.deaths||0, st=P.wall0||(endWall-timeMs);
+      run(db=>{ db.ref('parkour/live/'+uid).update({finishedAt:endWall,timeMs,deaths,cp:100,updated:TS()});
+        db.ref('parkour/best/'+uid).transaction(v=>{ if(v&&v.timeMs&&v.timeMs<=timeMs) return; return {uid,name,startedAt:st,finishedAt:endWall,timeMs,deaths}; });
+        db.ref('parkour/players/'+uid).transaction(v=>{ v=v||{}; v.finishes=(v.finishes||0)+1; v.maxLevel=100; return v; }); }); }
+  };
+})();
+
+if(P && P.alive && window.isPlaying) return;
+window._pk={t0:performance.now(),deaths:0,cp:0,alive:true,fin:false,dead:false};
+PKStats.start(window._pk);
+PKScreens.start(api);
+let el=document.getElementById('pk-hud'); if(el) el.remove();
+el=document.createElement('div'); el.id='pk-hud';
+el.style.cssText='position:fixed;top:12px;left:50%;transform:translateX(-50%);z-index:9000;padding:7px 18px;border-radius:10px;background:rgba(8,12,28,.72);border:1px solid rgba(0,230,255,.5);color:#dff;font:700 16px "Rajdhani",monospace,sans-serif;letter-spacing:1px;pointer-events:none;box-shadow:0 0 14px rgba(0,230,255,.25)';
+document.body.appendChild(el);
+const iv=setInterval(()=>{
+  const q=window._pk;
+  if(!window.isPlaying||!q){clearInterval(iv); if(q) q.alive=false; el.remove(); return;}
+  const hp=(window.gameState&&window.gameState.health)||0;
+  if(hp<=0&&!q.dead){q.dead=true;q.deaths++;PKStats.death(q.deaths);} if(hp>0) q.dead=false;
+  const t=((q.fin?q.tEnd:performance.now())-q.t0)/1000;
+  const m=Math.floor(t/60), s=(t%60).toFixed(1).padStart(4,'0');
+  el.innerHTML='⏱ '+String(m).padStart(2,'0')+':'+s+' &nbsp;·&nbsp; ☠ '+q.deaths+' &nbsp;·&nbsp; 🚩 LEVEL '+q.cp+'/100';
+},100);
+api.addMessage('🏁 PARKUR boshlandi! Omad!','#00e5ff');
